@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.dxf
+*.dwg
+*.xlsx
+_frames*.json
+base_media*.json
+*.tmp

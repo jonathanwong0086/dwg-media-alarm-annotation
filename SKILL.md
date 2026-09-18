@@ -1,0 +1,94 @@
+---
+name: dwg-media-alarm-annotation
+description: >
+  为化工设备布置图(DWG/DXF)按介质危害自动标注三类报警：可燃(甲/乙类)、有毒、氧含量报警。
+  按 TK*** 图框分区，二级分组(类别→物料→设备)标注在图框四角内，不跨图框。
+  介质列灵活识别不写死；可燃范围由 chem-properties-excel 生成的物性表(火灾危险性类别)驱动。
+  Trigger: "介质标注" / "报警标注" / "设备布置图标注" / "可燃有毒标注"
+version: 1.0.0
+allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
+---
+
+# 设备布置图介质报警标注
+
+从设备布置图 DWG + 设备一览表 + 化学品物性表出发，自动为每台设备判定并标注
+**可燃 / 有毒 / 氧含量报警** 三类介质报警，按图框分区、二级分组输出 DXF。
+
+## 分类规则（核心）
+
+| 报警类别 | 判定依据 | 数据来源 |
+|----------|----------|----------|
+| **可燃** | 介质中任一物料的**火灾危险性类别为甲类或乙类** (GB 50016-2014 表3.1.1) | 物性表"火灾危险性类别"列 |
+| **有毒** | 介质中任一物料**被列入有毒气体检测目录** | 物性表"是否被列入有毒气体检测目录"列 |
+| **氧含量报警** | 介质含"氮/N2"，**或**用户显式指定的设备(离心机C/耙式干燥器D/DR用氮保护但介质列未写氮) | 介质列 + `--oxygen-tags` |
+
+> 可燃范围**不再用硬编码物料清单**，而是读物性表的火灾类别。这是本skill与旧脚本的关键区别。
+
+## 前置条件（强制检查）
+
+标注依赖一份**化学品物性表**，必须含"火灾危险性类别"列。开工前先确认：
+
+1. 用 Glob 在项目目录找 `*物性*.xlsx` / `*化学品物性数据*.xlsx`
+2. 找不到就**停下**，提示用户先用 [chem-properties-excel](https://github.com/jonathanwong0086/chem-properties-excel) 生成物性表：
+   > 本标注需要一份含"火灾危险性类别(甲/乙/丙)"的化学品物性表来界定可燃范围。
+   > 请先运行 chem-properties-excel skill，从设备一览表的介质列生成物性表，再回来标注。
+3. 物性表若为百度网盘加密文件，先用 decryptor CLI 解密（见 [decryptor-cli] skill）
+
+## 工作流程（5步）
+
+所有脚本在 `scripts/` 下，可独立运行也可串联。中间产物为 JSON。
+
+### Step 1 · 图纸识别
+```bash
+python scripts/detect_frames.py "<布置图.dwg>" --out _frames.json
+```
+- DWG 自动经 ODA 转 DXF（默认路径 `C:/Program Files/ODA/ODAFileConverter 27.1.0`，`--oda` 可改）
+- 识别 `TK[1-3][L/H][A/B/C]` 图框块（位于图框左下角）
+- **朝向自动判定**：测试横放/竖放两种标准尺寸，选"全覆盖且零重叠"的
+- 提取全部设备位号及坐标
+
+### Step 2 · 设备表读取
+```bash
+python scripts/read_equipment.py "<设备一览表.xlsx>" --out base_media.json
+```
+- **灵活识别介质列**（不写死列号）：空白规范化后按 `介质/物料/主要成分` 匹配表头
+- 换热器类"介质"大表头下的**壳程/管程双子列**都纳入；相邻的温度/压力/材质列(也分壳程管程)自动排除
+- 键为**基础位号**(去尾缀)，因设备表与布置图尾缀常不一致
+
+### Step 3+4 · 分类与标注
+```bash
+python scripts/annotate.py --frames _frames.json --media base_media.json \
+    --props "<物性表.xlsx>" --out "标注.dxf" \
+    [--oxygen-tags C1001,DR2001]
+```
+- 物性表列同样灵活识别（化学品名称/火灾危险性类别/有毒气体检测目录）
+- **基础位号匹配**：设备表与布置图尾缀双向不一致(P1001↔P1001AB、F2001AB↔F2001)，去尾缀匹配最稳健
+- 每图框独立，标注全部落在**四角内**；左上角二级分组竖排：
+  ```
+  【可燃】共 N 台            ← 一级：类别(红色方块)
+    ● 甲苯 (6台)            ← 二级：具体物料
+        R1001A ──○         ← 位号+引线到设备圈
+    ● DMF (3台)
+  【有毒】共 M 台
+    ● 三乙胺 (5台)
+  ```
+- 同一设备多报警会在多个类别块各出现一次
+- 标注超出图框下边界时打印警告
+
+### Step 5 · 交付
+- 检查每个图框标注是否在四角内（脚本已内置边界警告）
+- 用户确认后复制到项目目录（加密盘用 shutil 复制，处理中文路径）
+
+## 关键规则速查
+
+- **不跨图框**：每个 TK 图框是一个打印单元，标注不得跨越
+- **全在四角内**：图例、引线、文字全部在图框四个角点以内
+- **左上角组织**：文字放左上角依次下排，引线引到文字附近，不散乱
+- **氧含量报警默认严格**：仅介质列含氮才触发；C/DR 设备如需报警由用户 `--oxygen-tags` 指定
+- **TK 命名**：TK[系列][朝向][加长]，详见 [reference/tk-frame-sizes.md](reference/tk-frame-sizes.md)
+- **分类细则**：见 [reference/classification-rules.md](reference/classification-rules.md)
+
+## 依赖
+- Python: `ezdxf`, `openpyxl`
+- ODA File Converter（DWG→DXF，仅当输入是 DWG）
+- 前置 skill: chem-properties-excel（物性表）、decryptor-cli（解密加密图纸/表格）
