@@ -3,7 +3,7 @@ name: dwg-media-alarm-annotation
 description: >
   为化工设备布置图(DWG/DXF)按介质危害自动标注三类报警：可燃(甲/乙类)、有毒、氧含量报警。
   按 TK*** 图框分区，二级分组(类别→物料→设备)标注在图框四角内，不跨图框。
-  介质列灵活识别不写死；可燃范围由 chem-properties-excel 生成的物性表(火灾危险性类别)驱动。
+  介质列灵活识别不写死；可燃范围(火灾危险性类别)与有毒范围(有毒气体检测目录)均由 chem-properties-excel 生成的物性表驱动。
   Trigger: "介质标注" / "报警标注" / "设备布置图标注" / "可燃有毒标注"
 version: 1.1.0
 allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
@@ -22,17 +22,18 @@ allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
 | **有毒** | 介质中任一物料**被列入有毒气体检测目录** | 物性表"是否被列入有毒气体检测目录"列 |
 | **氧含量报警** | 介质含"氮/N2"，**或**用户显式指定的设备(离心机C/耙式干燥器D/DR用氮保护但介质列未写氮) | 介质列 + `--oxygen-tags` |
 
-> 可燃范围**不再用硬编码物料清单**，而是读物性表的火灾类别。这是本skill与旧脚本的关键区别。
+> 可燃范围与有毒范围都**不再用硬编码物料清单**：可燃读物性表的火灾类别列，有毒读有毒气体检测目录列，两者都由 chem-properties-excel 生成。这是本skill与旧脚本的关键区别。
 
 **有毒优先规则**：一台设备既有毒又可燃时，**只按有毒处理，不再标注可燃**。有毒是更高级别的防护要求，标了有毒就不必再叠加可燃标注。分类脚本 `classify()` 内置 `if toxic and combustible: combustible=False`。
 
 ## 前置条件（强制检查）
 
-标注依赖一份**化学品物性表**，必须含"火灾危险性类别"列。开工前先确认：
+标注依赖一份**化学品物性表**，必须含"火灾危险性类别"列（界定可燃）和"是否被列入有毒气体检测目录"列（界定有毒）。开工前先确认：
 
 1. 用 Glob 在项目目录找 `*物性*.xlsx` / `*化学品物性数据*.xlsx`
 2. 找不到就**停下**，提示用户先用 [chem-properties-excel](https://github.com/jonathanwong0086/chem-properties-excel) 生成物性表：
-   > 本标注需要一份含"火灾危险性类别(甲/乙/丙)"的化学品物性表来界定可燃范围。
+   > 本标注需要一份化学品物性表：用"火灾危险性类别(甲/乙/丙)"列界定可燃范围，
+   > 用"是否被列入有毒气体检测目录"列界定有毒范围。
    > 请先运行 chem-properties-excel skill，从设备一览表的介质列生成物性表，再回来标注。
 3. 物性表若为百度网盘加密文件，先用 decryptor CLI 解密（见 [decryptor-cli] skill）
 

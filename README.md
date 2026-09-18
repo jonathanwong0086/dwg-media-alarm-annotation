@@ -4,8 +4,8 @@
 **可燃(甲/乙类)、有毒、氧含量报警**。
 
 按 `TK***` 图框分区，二级分组(类别→物料→设备)标注在图框四角内，不跨图框。
-介质列灵活识别不写死；可燃范围由 [chem-properties-excel](https://github.com/jonathanwong0086/chem-properties-excel)
-生成的物性表(火灾危险性类别列)驱动。
+介质列灵活识别不写死；可燃范围(火灾危险性类别列)与有毒范围(有毒气体检测目录列)
+均由 [chem-properties-excel](https://github.com/jonathanwong0086/chem-properties-excel) 生成的物性表驱动。
 
 ## 分类规则
 
@@ -40,7 +40,7 @@ python scripts/annotate.py --frames _frames.json --media base_media.json \
 
 - Python: `ezdxf`, `openpyxl`
 - [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)（DWG→DXF，仅当输入是 DWG）
-- 前置：先用 chem-properties-excel 生成物性表
+- 前置：先用 chem-properties-excel 生成物性表（含火灾危险性类别列 + 有毒气体检测目录列）
 
 ## 结构
 
