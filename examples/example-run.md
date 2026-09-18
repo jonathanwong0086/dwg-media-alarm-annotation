@@ -15,7 +15,6 @@
 ls *物性*.xlsx *properties*.xlsx
 ```
 找不到 → 先跑 chem-properties-excel skill 生成。
-文件在加密网盘 → 先用 decryptor-cli 解密。
 
 ## Step 1 · 图纸识别
 
@@ -93,7 +92,7 @@ python scripts/annotate.py ... --oxygen-tags AAA0001,BBB0002
 ## Step 5 · 交付
 
 用 CAD 打开确认标注都在图框内后，复制到项目目录。
-中文/加密盘路径用 Python `shutil.copy2` 处理，避免 shell 转义问题。
+含中文路径时用 Python `shutil.copy2` 处理，避免 shell 转义问题。
 
 ## 常见问题
 

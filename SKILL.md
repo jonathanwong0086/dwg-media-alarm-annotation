@@ -35,7 +35,6 @@ allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
    > 本标注需要一份化学品物性表：用"火灾危险性类别(甲/乙/丙)"列界定可燃范围，
    > 用"是否被列入有毒气体检测目录"列界定有毒范围。
    > 请先运行 chem-properties-excel skill，从设备一览表的介质列生成物性表，再回来标注。
-3. 物性表若为百度网盘加密文件，先用 decryptor CLI 解密（见 [decryptor-cli] skill）
 
 ## 工作流程（5步）
 
@@ -83,7 +82,7 @@ python scripts/annotate.py --frames _frames.json --media base_media.json \
 
 ### Step 5 · 交付
 - 检查每个图框标注是否在四角内（脚本已内置边界警告）
-- 用户确认后复制到项目目录（加密盘用 shutil 复制，处理中文路径）
+- 用户确认后复制到项目目录（含中文路径时用 Python shutil 复制，避免 shell 转义问题）
 
 ## 关键规则速查
 
@@ -99,4 +98,4 @@ python scripts/annotate.py --frames _frames.json --media base_media.json \
 ## 依赖
 - Python: `ezdxf`, `openpyxl`
 - ODA File Converter（DWG→DXF，仅当输入是 DWG）
-- 前置 skill: chem-properties-excel（物性表）、decryptor-cli（解密加密图纸/表格）
+- 前置 skill: chem-properties-excel（生成物性表）
