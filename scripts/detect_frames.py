@@ -7,10 +7,17 @@
 
 输出 _frames.json:
   {
-    "frames": [{frame_id, tk_name, x_min, x_max, y_min, y_max, tags:[...]}...],
-    "tag_coords": {tag: [x, y], ...},
+    "frames": [{frame_id, tk_name, x_min, x_max, y_min, y_max,
+                tags:[...],                    # 去重后的位号列表
+                instances:[[tag, x, y], ...]}  # 每次出现（含跨楼层重复）
+               ...],
+    "tag_coords": {tag: [[x, y], ...], ...},   # 同一位号可能出现在多处
     "orientation": "landscape" | "portrait"
   }
+
+跨楼层设备说明: 同一设备位号可能出现在多个图框内（体现在图里就是
+位号在不同图框各画一次）。tag_coords 用坐标列表保留全部出现位置，
+frames[*].instances 记录每次出现，标注脚本据此在每个图框逐次标注。
 """
 import sys
 import os
@@ -60,20 +67,26 @@ def extract(dxf_path, scale):
         if TK_NAME_RE.match(name):
             tks.append((name, round(ent.dxf.insert.x), round(ent.dxf.insert.y)))
 
+    # 保留同一位号的全部出现位置（跨楼层设备会出现多次）
     tag_coords = {}
     for ent in msp.query('TEXT MTEXT'):
         text = ent.dxf.text if ent.dxftype() == 'TEXT' else ent.text
         text = text.strip()
         if is_equipment_tag(text):
             p = ent.dxf.insert
-            tag_coords[text] = (round(p.x), round(p.y))
+            tag_coords.setdefault(text, []).append((round(p.x), round(p.y)))
     return tks, tag_coords
 
 
 def assign(tks, tag_coords, orient, scale):
-    """给定朝向，把位号分配到各图框，返回 (frames, assigned, dup)。
+    """给定朝向，把位号分配到各图框，返回 (frames, covered, overlap)。
 
     TK 图框块位于图框左下角，尺寸由 parse_tk_name 的标准尺寸给出。
+    每个出现位置(instance)独立判定归属；同一位号的多次出现可分属不同
+    图框（跨楼层），也可能落在同一图框（同层多处）。
+
+    - covered: 落入任意图框的出现次数（越多越好）
+    - overlap: 一次出现同时落进多个图框的次数（图框重叠/尺寸判错，越少越好）
     """
     frames = []
     for i, (name, bx, by) in enumerate(sorted(tks, key=lambda t: (t[2], t[1])), 1):
@@ -81,29 +94,38 @@ def assign(tks, tag_coords, orient, scale):
         W, H = dims[orient]
         x_min, x_max = bx, bx + W
         y_min, y_max = by, by + H
-        tags = [t for t, (x, y) in tag_coords.items()
-                if x_min <= x <= x_max and y_min <= y <= y_max]
+        instances = []
+        for t, coords in tag_coords.items():
+            for (x, y) in coords:
+                if x_min <= x <= x_max and y_min <= y <= y_max:
+                    instances.append([t, x, y])
+        # 去重后的位号列表，保持首次出现顺序
+        tags = list(dict.fromkeys(inst[0] for inst in instances))
         frames.append({'frame_id': i, 'tk_name': name,
                        'x_min': x_min, 'x_max': x_max,
-                       'y_min': y_min, 'y_max': y_max, 'tags': tags})
-    seen = {}
+                       'y_min': y_min, 'y_max': y_max,
+                       'tags': tags, 'instances': instances})
+
+    # 统计每个 (tag, x, y) 出现位置命中了几个图框
+    hit = {}
     for f in frames:
-        for t in f['tags']:
-            seen[t] = seen.get(t, 0) + 1
-    assigned = sum(len(f['tags']) for f in frames)
-    dup = sum(1 for v in seen.values() if v > 1)
-    return frames, assigned, dup
+        for t, x, y in f['instances']:
+            key = (t, x, y)
+            hit[key] = hit.get(key, 0) + 1
+    covered = len(hit)
+    overlap = sum(1 for v in hit.values() if v > 1)
+    return frames, covered, overlap
 
 
 def choose_orientation(tks, tag_coords, scale):
-    """测试横放/竖放，选"覆盖最全且重复最少"的朝向。"""
+    """测试横放/竖放，选"覆盖最全且重叠最少"的朝向。"""
     best = None
     for orient in ('landscape', 'portrait'):
-        frames, assigned, dup = assign(tks, tag_coords, orient, scale)
-        # 评分：优先零重叠，其次覆盖最多。dup 惩罚权重高。
-        score = assigned - dup * 1000
+        frames, covered, overlap = assign(tks, tag_coords, orient, scale)
+        # 评分：优先零重叠(图框不该互相盖住)，其次覆盖最多。
+        score = covered - overlap * 1000
         if best is None or score > best[0]:
-            best = (score, orient, frames, assigned, dup)
+            best = (score, orient, frames, covered, overlap)
     return best[1], best[2], best[3], best[4]
 
 
@@ -122,19 +144,22 @@ def main():
         print(f'  已转换: {path}')
 
     tks, tag_coords = extract(path, args.scale)
+    total_inst = sum(len(v) for v in tag_coords.values())
     print(f'TK 图框块: {len(tks)} 个')
     for name, x, y in sorted(tks, key=lambda t: (t[2], t[1])):
         print(f'  {name} @ ({x}, {y})')
-    print(f'设备位号: {len(tag_coords)} 个')
+    print(f'设备位号: {len(tag_coords)} 个（出现 {total_inst} 次，含跨楼层重复）')
 
     if not tks:
         print('警告: 未找到 TK 图框块，无法分区。')
         return
 
-    orient, frames, assigned, dup = choose_orientation(tks, tag_coords, args.scale)
-    print(f'\n判定朝向: {orient}  分配: {assigned}/{len(tag_coords)}  重复: {dup}')
+    orient, frames, covered, overlap = choose_orientation(tks, tag_coords, args.scale)
+    print(f'\n判定朝向: {orient}  覆盖: {covered}/{total_inst} 次  重叠: {overlap}')
     for f in frames:
-        print(f"  图框{f['frame_id']} [{f['tk_name']}]: {len(f['tags'])} 台")
+        n_inst = len(f['instances'])
+        extra = f'（{n_inst} 处）' if n_inst != len(f['tags']) else ''
+        print(f"  图框{f['frame_id']} [{f['tk_name']}]: {len(f['tags'])} 台{extra}")
 
     with open(args.out, 'w', encoding='utf-8') as fp:
         json.dump({'frames': frames, 'tag_coords': tag_coords,

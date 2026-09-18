@@ -43,19 +43,51 @@ def is_equipment_tag(text, loose=False):
 
 
 # ────────────────────────────────────────────────────────────
-# 介质字符串分词
+# 介质字符串分词 + 归一化
 # ────────────────────────────────────────────────────────────
-_MEDIA_SPLIT_RE = re.compile(r'[、，,；;/\s]+')
+# 分隔符含中文顿号/逗号/分号/斜杠/空白，以及连接词 和/及/与
+# （"三乙胺二乙胺" 之类连写、"乙腈和甲苯" 都能拆开）
+_MEDIA_SPLIT_RE = re.compile(r'[、，,；;/\s]+|和|及|与')
+
+# 数量/浓度修饰词：剥掉后才能与物性表里的纯物料名精确匹配
+_QTY_PREFIX_RE = re.compile(r'^(少量|微量|痕量|大量|适量|约|含|部分)')
+_PCT_PREFIX_RE = re.compile(r'^\d+(\.\d+)?%')
+_TAIL_RE = re.compile(r'(等)$')
 
 
-def split_media(media_str):
+def normalize_token(tok):
+    """剥离数量/浓度修饰词，得到可与物性表精确匹配的物料名。
+
+    '少量乙腈'        -> '乙腈'
+    '微量甲苯'        -> '甲苯'
+    '40%二甲胺水溶液' -> '二甲胺水溶液'
+    '甲苯等'          -> '甲苯'
+
+    注意: 只剥修饰词，不做子串包含匹配。'三乙胺盐酸盐'、'溴虫腈'
+    等本身是不同物质，归一化后仍不等于'三乙胺'/'溴'，故不会被误判。
+    """
+    if tok is None:
+        return ''
+    s = str(tok).strip()
+    s = _PCT_PREFIX_RE.sub('', s)
+    s = _QTY_PREFIX_RE.sub('', s)
+    s = _TAIL_RE.sub('', s)
+    return s.strip()
+
+
+def split_media(media_str, normalize=False):
     """把介质列文本拆成单个物料名列表。
 
     '甲苯、DMF、水' -> ['甲苯', 'DMF', '水']
+    normalize=True 时对每个 token 再走 normalize_token（剥数量/浓度前缀）。
     """
     if not media_str:
         return []
-    return [p.strip() for p in _MEDIA_SPLIT_RE.split(str(media_str)) if p.strip()]
+    toks = [p.strip() for p in _MEDIA_SPLIT_RE.split(str(media_str)) if p and p.strip()]
+    if normalize:
+        toks = [normalize_token(p) for p in toks]
+        toks = [p for p in toks if p]
+    return toks
 
 
 # ────────────────────────────────────────────────────────────

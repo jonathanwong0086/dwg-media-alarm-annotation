@@ -5,7 +5,7 @@ description: >
   按 TK*** 图框分区，二级分组(类别→物料→设备)标注在图框四角内，不跨图框。
   介质列灵活识别不写死；可燃范围由 chem-properties-excel 生成的物性表(火灾危险性类别)驱动。
   Trigger: "介质标注" / "报警标注" / "设备布置图标注" / "可燃有毒标注"
-version: 1.0.0
+version: 1.1.0
 allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
 ---
 
@@ -23,6 +23,8 @@ allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
 | **氧含量报警** | 介质含"氮/N2"，**或**用户显式指定的设备(离心机C/耙式干燥器D/DR用氮保护但介质列未写氮) | 介质列 + `--oxygen-tags` |
 
 > 可燃范围**不再用硬编码物料清单**，而是读物性表的火灾类别。这是本skill与旧脚本的关键区别。
+
+**有毒优先规则**：一台设备既有毒又可燃时，**只按有毒处理，不再标注可燃**。有毒是更高级别的防护要求，标了有毒就不必再叠加可燃标注。分类脚本 `classify()` 内置 `if toxic and combustible: combustible=False`。
 
 ## 前置条件（强制检查）
 
@@ -46,6 +48,7 @@ python scripts/detect_frames.py "<布置图.dwg>" --out _frames.json
 - 识别 `TK[1-3][L/H][A/B/C]` 图框块（位于图框左下角）
 - **朝向自动判定**：测试横放/竖放两种标准尺寸，选"全覆盖且零重叠"的
 - 提取全部设备位号及坐标
+- **跨楼层设备保留全部出现位置**：同一位号可能出现在多个图框（跨楼层），也可能在同一图框出现多次。`tag_coords` 用坐标列表记录，`frames[*].instances` 记录每次出现——**不再折叠成一个坐标**（这是 1.0.0 的 bug：只标注了其中一处）
 
 ### Step 2 · 设备表读取
 ```bash
@@ -62,6 +65,7 @@ python scripts/annotate.py --frames _frames.json --media base_media.json \
     [--oxygen-tags C1001,DR2001]
 ```
 - 物性表列同样灵活识别（化学品名称/火灾危险性类别/有毒气体检测目录）
+- **介质名归一化后精确匹配**：物料 token 先剥离数量/浓度修饰（`少量/微量/40%/…等`）再与物性表精确匹配。剥前缀而**不做子串包含**，避免"少量乙腈"匹配不上、又不会把"三乙胺盐酸盐"误判为"三乙胺"、"溴虫腈"误判为"溴"。连接词 `和/及/与` 也作分隔符（"三乙胺和二乙胺"→两种）
 - **基础位号匹配**：设备表与布置图尾缀双向不一致(P1001↔P1001AB、F2001AB↔F2001)，去尾缀匹配最稳健
 - 每图框独立，标注全部落在**四角内**；左上角二级分组竖排：
   ```
@@ -73,6 +77,7 @@ python scripts/annotate.py --frames _frames.json --media base_media.json \
     ● 三乙胺 (5台)
   ```
 - 同一设备多报警会在多个类别块各出现一次
+- **跨楼层设备逐次画圈引线**：一个位号在本图框出现多处时，每处都画圈+引线，标签后缀`（本图框N处）`；出现在多个图框则各图框都标注
 - 标注超出图框下边界时打印警告
 
 ### Step 5 · 交付
@@ -85,6 +90,8 @@ python scripts/annotate.py --frames _frames.json --media base_media.json \
 - **全在四角内**：图例、引线、文字全部在图框四个角点以内
 - **左上角组织**：文字放左上角依次下排，引线引到文字附近，不散乱
 - **氧含量报警默认严格**：仅介质列含氮才触发；C/DR 设备如需报警由用户 `--oxygen-tags` 指定
+- **有毒优先**：既有毒又可燃只标有毒（见分类规则）
+- **跨楼层多图框**：位号出现在几个图框就在几个图框标注，同图框出现多处就画多个圈
 - **TK 命名**：TK[系列][朝向][加长]，详见 [reference/tk-frame-sizes.md](reference/tk-frame-sizes.md)
 - **分类细则**：见 [reference/classification-rules.md](reference/classification-rules.md)
 

@@ -94,8 +94,12 @@ def classify(media_str, props, tag, oxygen_tags):
 
     返回 (combustible, toxic, oxygen, hit) 其中 hit 是
     {类别: 命中的第一个物料名} 用于二级分组。
+
+    - 物料名先经 normalize（剥离"少量/微量/浓度%/…等"前后缀）再与物性表
+      精确匹配，避免"少量乙腈"匹配不上、"三乙胺盐酸盐"误判为"三乙胺"。
+    - 有毒优先: 既有毒又可燃的，只按有毒处理，不再标注可燃。
     """
-    materials = split_media(media_str)
+    materials = split_media(media_str, normalize=True)
     combustible = toxic = oxygen = False
     hit = {}
     for m in materials:
@@ -114,6 +118,10 @@ def classify(media_str, props, tag, oxygen_tags):
     if get_base_tag(tag) in oxygen_tags or tag in oxygen_tags:
         oxygen = True
         hit.setdefault(CLASS_OXYGEN, '氮气(保护)')
+    # 有毒优先: 既有毒又可燃 → 只标有毒，撤销可燃
+    if toxic and combustible:
+        combustible = False
+        hit.pop(CLASS_COMBUSTIBLE, None)
     return combustible, toxic, oxygen, hit
 
 
@@ -124,7 +132,7 @@ CIR_R = 180
 ROW_SP = 320
 
 
-def annotate(frames, tag_coords, tag_cls, out_path, title_prefix):
+def annotate(frames, tag_cls, out_path, title_prefix):
     doc = ezdxf.new(dxfversion='R2010')
     doc.header['$INSUNITS'] = 4
     msp = doc.modelspace()
@@ -136,6 +144,11 @@ def annotate(frames, tag_coords, tag_cls, out_path, title_prefix):
         classified = {t: tag_cls[t] for t in frame['tags'] if t in tag_cls}
         if not classified:
             continue
+        # 本图框内每个位号的全部出现位置（跨楼层设备在本图框可能出现多次）
+        frame_positions = defaultdict(list)
+        for t, x, y in frame['instances']:
+            if t in classified:
+                frame_positions[t].append((x, y))
         legend_x = frame['x_min'] + 1000
         legend_y = frame['y_max'] - 2000
 
@@ -176,17 +189,24 @@ def annotate(frames, tag_coords, tag_cls, out_path, title_prefix):
                              dxfattribs={'insert': (legend_x + 250, y2),
                                          'height': TEXT_H + 30, 'layer': lname})
                 row += 1
-                tags.sort(key=lambda t: (-tag_coords[t][1], tag_coords[t][0]))
+                # 按本图框内首个出现位置从上到下、从左到右排序
+                tags.sort(key=lambda t: (-frame_positions[t][0][1],
+                                         frame_positions[t][0][0]))
                 for tag in tags:
-                    ex, ey = tag_coords[tag]
+                    positions = frame_positions[tag]
                     cy = legend_y - row * ROW_SP
-                    msp.add_circle((ex, ey), radius=CIR_R,
-                                   dxfattribs={'layer': lname})
-                    msp.add_text(f"      {tag}",
+                    label = f"      {tag}"
+                    if len(positions) > 1:
+                        label += f"（本图框{len(positions)}处）"
+                    msp.add_text(label,
                                  dxfattribs={'insert': (legend_x + 450, cy),
                                              'height': TEXT_H, 'layer': lname})
-                    msp.add_line((ex, ey), (legend_x + 400, cy + 80),
-                                 dxfattribs={'layer': lname})
+                    # 对该位号在本图框的每一次出现都画圈+引线
+                    for (ex, ey) in positions:
+                        msp.add_circle((ex, ey), radius=CIR_R,
+                                       dxfattribs={'layer': lname})
+                        msp.add_line((ex, ey), (legend_x + 400, cy + 80),
+                                     dxfattribs={'layer': lname})
                     row += 1
             row += 1
         bottom = legend_y - row * ROW_SP
@@ -231,14 +251,16 @@ def main():
         if comb or tox or oxy:
             tag_cls[tag] = (comb, tox, oxy, hit)
 
-    print(f'布置图位号: {len(tag_coords)}  已匹配设备表: '
+    total_inst = sum(len(v) if isinstance(v, list) else 1
+                     for v in tag_coords.values())
+    print(f'布置图位号: {len(tag_coords)}（出现 {total_inst} 次）  已匹配设备表: '
           f'{sum(1 for t in tag_coords if get_base_tag(t) in base_media)}  '
           f'需标注: {len(tag_cls)}')
     print(f'  可燃: {sum(1 for v in tag_cls.values() if v[0])}  '
           f'有毒: {sum(1 for v in tag_cls.values() if v[1])}  '
           f'氧含量报警: {sum(1 for v in tag_cls.values() if v[2])}')
 
-    annotate(frames, tag_coords, tag_cls, args.out, args.title_prefix)
+    annotate(frames, tag_cls, args.out, args.title_prefix)
 
 
 if __name__ == '__main__':
